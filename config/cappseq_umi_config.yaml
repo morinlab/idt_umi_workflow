@@ -1,0 +1,31 @@
+cappseq_umi_workflow:
+  refgenome: "/morinlab/reference/igenomes/Homo_sapiens/GSC/GRCh38/Sequence/BWAIndex/GRCh38_no_alt.fa"
+  conda_yaml: ""
+
+  # Input and output
+  datadir: "/mnt/thanos_lv/raw_data/DLBCL_Montreal/PlasmaTargetPanelFastqs/"
+  samplefile: "/mnt/thanos_lv/pipelines/DLBCL_Montreal/PlasmaTwistCAPPSeq/BAMs/samplelist.txt"
+  baseoutdir: "/mnt/thanos_lv/pipelines/DLBCL_Montreal/PlasmaTwistCAPPSeq/BAMs"
+
+  readgroup:
+    centre: "MCGILL"
+    platformunit: "ILLUMINA"
+    platformmodel: "MISEQ"
+    description: "CAPPSeq of lymphoma-associated genes"
+
+  # Threads
+  bwa_threads: 8
+  duplexconsensus_threads: 8
+  samtools_sort_threads: 8
+  basequal_threads: 2
+
+  # Barcode an duplex information
+  barcodelength: "8"
+  barcodelocation: "8M+T"  # Location of the barcode. See https://github.com/fulcrumgenomics/fgbio/wiki/Read-Structures
+  umiedits: "2"  # Would be warry of changing
+  minreads: "0"  # DO NOT SET TO x UNLESS YOU WANT AT LEAST x READ(S) FROM **EACH** STRAND
+
+  # Cleanup and sanitization
+  max_base_qual: 70
+  tags_to_remove: {'ad', 'ac', 'bd', 'ae', 'be', 'bq', 'bc', 'aq'}
+

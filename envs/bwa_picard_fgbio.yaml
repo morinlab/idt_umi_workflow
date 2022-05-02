@@ -1,0 +1,9 @@
+channels:
+    - bioconda
+    - conda-forge
+dependencies:
+    - bwa
+    - samtools
+    - picard
+    - fgbio>2
+    - r-base>4
