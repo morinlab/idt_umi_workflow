@@ -24,6 +24,7 @@ def is_gzipped(filepath):
         magicnum = f.read(2)
         return magicnum == b'\x1f\x8b'  # Magic number of gzipped files
 
+
 def generate_read_group(fastq, sample):
     # Parses flowcell, lane, and barcode information from FASTQ read names
     # Uses this information (and config file info) to generate a read group line
@@ -69,6 +70,10 @@ rule trim_umi:
         # Because globs are weird
         input.r1 = input.r1[0]
         input.r2 = input.r2[0]
+        # Sanity check barcode
+        barcodelength = int(params.barcodelength)
+        if barcodelength <= 0:
+            raise AttributeError("\'barcodelength\' must be greater than 0")
         # Trim read1
         open_func = lambda x: gzip.open(x, "rt") if is_gzipped(x) else open(x)
         write_func = lambda x: gzip.open(x, "wt") if x.endswith(".gz") else open(x, "w")
