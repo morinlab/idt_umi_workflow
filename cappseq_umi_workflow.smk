@@ -5,6 +5,7 @@ import gzip
 import datetime
 import glob
 import pysam
+import math
 
 configfile: "config/cappseq_umi_config.yaml"
 
@@ -14,6 +15,8 @@ samplelist = []
 with open(config["cappseq_umi_workflow"]["samplefile"]) as f:
     for line in f:
         line = line.rstrip("\n").rstrip("\r")
+        if line.startswith("#"):  # Ignore comment lines
+            continue
         samplelist.append(line)
 
 outdir = config["cappseq_umi_workflow"]["baseoutdir"]
@@ -56,6 +59,66 @@ def generate_read_group(fastq, sample):
     readgroup = f"@RG\\tID:{sample}\\tBC:{barcode}\\tCN:{centre}\\tDS:\'{description}\'\\tDT:{date}\\tLB:{sample}\\tPL:{platform}\\tPM:{platformmodel}\\tPU:{platformunit}\\tSM:{sample}"
     return readgroup
 
+# Adapted from the multiQC module
+# Used to calculate the estimated total number of molecules in a library
+def estimateLibrarySize(readPairs, uniqueReadPairs):
+    """
+    Picard calculation to estimate library size
+    Taken & translated from the Picard codebase:
+    https://github.com/broadinstitute/picard/blob/78ea24466d9bcab93db89f22e6a6bf64d0ad7782/src/main/java/picard/sam/DuplicationMetrics.java#L153-L164
+    Note: Optical duplicates are contained in duplicates and therefore do not enter the calculation here.
+    See also the computation of READ_PAIR_NOT_OPTICAL_DUPLICATES.
+     * Estimates the size of a library based on the number of paired end molecules observed
+     * and the number of unique pairs observed.
+     * <p>
+     * Based on the Lander-Waterman equation that states:
+     * C/X = 1 - exp( -N/X )
+     * where
+     * X = number of distinct molecules in library
+     * N = number of read pairs
+     * C = number of distinct fragments observed in read pairs
+    """
+
+    readPairDuplicates = readPairs - uniqueReadPairs
+
+    if readPairs > 0 and readPairDuplicates > 0:
+
+        m = 1.0
+        M = 100.0
+
+        if uniqueReadPairs >= readPairs or f(m * uniqueReadPairs, uniqueReadPairs, readPairs) < 0:
+            logging.warning("Picard recalculation of ESTIMATED_LIBRARY_SIZE skipped - metrics look wrong")
+            return None
+
+        # find value of M, large enough to act as other side for bisection method
+        while f(M * uniqueReadPairs, uniqueReadPairs, readPairs) > 0:
+            M *= 10.0
+
+        # use bisection method (no more than 40 times) to find solution
+        for i in range(40):
+            r = (m + M) / 2.0
+            u = f(r * uniqueReadPairs, uniqueReadPairs, readPairs)
+            if u == 0:
+                break
+            elif u > 0:
+                m = r
+            elif u < 0:
+                M = r
+
+        return uniqueReadPairs * (m + M) / 2.0
+    else:
+        return None
+
+
+def f(x, c, n):
+    """
+    Picard calculation used when estimating library size
+    Taken & translated from the Picard codebase:
+    https://github.com/broadinstitute/picard/blob/78ea24466d9bcab93db89f22e6a6bf64d0ad7782/src/main/java/picard/sam/DuplicationMetrics.java#L172-L177
+    * Method that is used in the computation of estimated library size.
+    """
+    return c / x - 1 + math.exp(-n / x)
+
 
 rule trim_umi:
     input:
@@ -87,9 +150,9 @@ rule trim_umi:
                     if i % 2 == 0:
                         line = line[barcodelength:]
                     o.write(line)
-        
+
         # Trim read2
-        with open_func(input.r2) as f: 
+        with open_func(input.r2) as f:
             with write_func(output.r2) as o:
                 # WARNING: WILL NOT WORK WITH READS SHORTER THAN 8BP. WILL BREAK.
                 i = 0
@@ -99,7 +162,7 @@ rule trim_umi:
                     if i % 2 == 0:
                         line = line[barcodelength:]
                     o.write(line)
-                    
+
 
 rule bwa_align_unsorted:
     input:
@@ -107,7 +170,7 @@ rule bwa_align_unsorted:
         r2 = rules.trim_umi.output.r2,
         refgenome = config["cappseq_umi_workflow"]["refgenome"]
     output:
-        bam = temp(outdir + os.sep + "02-BWA" + os.sep + "{samplename}.bwa.unsort.bam")
+        bam = outdir + os.sep + "02-BWA" + os.sep + "{samplename}.bwa.unsort.bam"
     params:
         readgroup = lambda w: generate_read_group(glob.glob(config["cappseq_umi_workflow"]["datadir"] + os.sep + w.samplename + "*R1_001.fastq.gz")[0], w.samplename),
     threads:
@@ -118,7 +181,7 @@ rule bwa_align_unsorted:
         outdir + os.sep + "logs" + os.sep + "{samplename}.bwa_allreads.log"
     shell:
         "bwa mem -t {threads} -R \"{params.readgroup}\" {input.refgenome} {input.r1} {input.r2} 2> {log} | samtools view -b > {output.bam} 2> {log}"
-    
+
 
 # Add UMI tag
 rule fgbio_annotate_umis:
@@ -146,7 +209,7 @@ rule fgbio_group_umis:
         bam = temp(outdir + os.sep + "04-umigrouped" + os.sep + "{samplename}.umigrouped.sort.bam")
     params:
         maxedits = config["cappseq_umi_workflow"]["umiedits"]
-    threads: 
+    threads:
         config["cappseq_umi_workflow"]["samtools_sort_threads"]
     conda:
         "envs/bwa_picard_fgbio.yaml"
@@ -198,7 +261,7 @@ rule cap_base_qual:
             if "RG" in tagstoremove and level == "RG":
                 continue
             outHeader[level] = attributes
-	
+
         outFile = pysam.AlignmentFile(output.bam, header=outHeader, mode = "wb")
 
         # Process reads
@@ -261,7 +324,9 @@ rule picard_validate_sam:
         bam = rules.picard_annotate_bam.output.bam,
         refgenome = config["cappseq_umi_workflow"]["refgenome"]
     output:
-        txt = outdir + os.sep + "09-validoutput" + os.sep + "{samplename}.consensus.mapped.annot.bam.is_valid"
+        txt = outdir + os.sep + "09-validoutput" + os.sep + "{samplename}.consensus.mapped.ValidateSamFile.is_valid"
+    params:
+        outdir = outdir + os.sep + "09-validoutput"
     conda:
         "envs/bwa_picard_fgbio.yaml"
     log:
@@ -269,21 +334,198 @@ rule picard_validate_sam:
     shell:
         "picard ValidateSamFile -I {input.bam} -R {input.refgenome} > {output.txt} 2> {log}"
 
-# Calculate duplicate rate
-rule samtools_calculate_duplicate_rate:
+
+### QUALITY CONTROL RULES ###
+### Currently supported tools:
+### FASTQC
+### PICARD
+
+rule qc_fastqc:
     input:
-        collapsed_bam = rules.fgbio_duplex_consensus.output.bam,
-        all_reads_bam = rules.fgbio_group_umis.output.bam
+        bam = rules.bwa_align_unsorted.output.bam
     output:
-        txt = outdir + os.sep + "08-duplicaterate" + os.sep + "{samplename}.duplicaterate.txt"
+        qc = outdir + os.sep + "Q1-fastqc" + os.sep + "{samplename}.bwa.unsort_fastqc.html"
+    params:
+        outdir = outdir + os.sep + "Q1-fastqc"
+    conda:
+        "envs/picard_fastqc.yaml"
+    log:
+        outdir + os.sep + "logs" + os.sep + "{samplename}.fastqc.log"
+    shell:
+        "fastqc -o {params.outdir} --nogroup -f bam {input.bam} 2> {log}"
+
+rule qc_picard_hsmetrics:
+    input:
+        bam = rules.picard_annotate_bam.output.bam,
+        refgenome = config["cappseq_umi_workflow"]["refgenome"]
+    output:
+        hsmet = outdir + os.sep + "Q2-hs_metrics" + os.sep + "{samplename}.hs_metrics.txt",
+        tarcov = outdir + os.sep + "Q2-hs_metrics" + os.sep + "{samplename}.target_coverage.txt"
+    params:
+        capture_reg_il = config["cappseq_umi_workflow"]["captureregionsil"],
+        outdir = outdir + os.sep + "Q2-hs_metrics",
+        max_ram_records = "5000000",
+        cov_cap_sens = "20000"
+    conda:
+        "envs/picard_fastqc.yaml"
+    log:
+        outdir + os.sep + "logs" + os.sep + "{samplename}.picard_hsmet.log"
+    shell:
+        "picard CollectHsMetrics -R {input.refgenome} -TI {params.capture_reg_il} -BI {params.capture_reg_il} -I {input.bam} -O {output.hsmet} --PER_TARGET_COVERAGE {output.tarcov} --MAX_RECORDS_IN_RAM {params.max_ram_records} --COVERAGE_CAP {params.cov_cap_sens} 2> {log}"
+
+rule qc_picard_oxog:
+    input:
+        bam = rules.picard_annotate_bam.output.bam,
+        refgenome = config["cappseq_umi_workflow"]["refgenome"]
+    output:
+        txt = outdir + os.sep + "Q3-oxog_metrics" + os.sep + "{samplename}.oxoG_metrics.txt"
+    params:
+        outdir = outdir + os.sep + "Q3-oxog_metrics"
+    conda:
+        "envs/picard_fastqc.yaml"
+    log:
+        outdir + os.sep + "logs" + os.sep + "{samplename}.picard_oxoG.log"
+    shell:
+        "picard CollectOxoGMetrics -I {input.bam} -R {input.refgenome} -O {output.txt} 2> {log}"
+
+rule qc_picard_insertsize:
+    input:
+        bam = rules.picard_annotate_bam.output.bam
+    output:
+        txt = outdir + os.sep + "Q4-insert_size" + os.sep + "{samplename}.insert_size_metrics.txt",
+        pdf = outdir + os.sep + "Q4-insert_size" + os.sep + "{samplename}.insert_size_histogram.pdf"
+    params:
+        outdir = outdir + os.sep + "Q4-insert_size"
+    conda:
+        "envs/picard_fastqc.yaml"
+    log:
+        outdir + os.sep + "logs" + os.sep + "{samplename}.picard_insertsize.log"
+    shell:
+        "picard CollectInsertSizeMetrics -I {input.bam} -O {output.txt} -H {output.pdf} 2> {log}"
+
+rule qc_fgbio_errorrate:
+    input:
+        bam = rules.picard_annotate_bam.output.bam,
+        refgenome = config["cappseq_umi_workflow"]["refgenome"]
+    output:
+        txt = outdir + os.sep + "Q5-error_rate" + os.sep + "{samplename}.error_rate_by_read_position.txt"
+    params:
+        outprefix = outdir + os.sep + "Q5-error_rate" + os.sep + "{samplename}",
+        outdir = outdir + os.sep + "Q5-error_rate",
+        capture_reg_il = config["cappseq_umi_workflow"]["captureregionsil"],
+        dbsnpvcf = config["cappseq_umi_workflow"]["dbsnpvcf"]
     conda:
         "envs/bwa_picard_fgbio.yaml"
+    log:
+        outdir + os.sep + "logs" + os.sep + "{samplename}.error_rate_by_position.log"
     shell:
-        'seq 1 | awk -v totalreads=$(samtools flagstat {input.all_reads_bam} | grep read1 | cut -d " " -f 1) -v collapsedreads=$(samtools flagstat {input.collapsed_bam} | grep read1 | cut -d " " -f 1) \'BEGIN{{print((totalreads - collapsedreads)/totalreads)}}\' > {output.txt}'
+        "fgbio ErrorRateByReadPosition -i {input.bam} -r {input.refgenome} -v {params.dbsnpvcf} -l {params.capture_reg_il} --collapse -o {params.outprefix} 2> {log}"
+
+rule qc_calc_dupl:
+    input:
+        collapsed_bam = rules.picard_annotate_bam.output.bam,
+        all_reads_bam = rules.bwa_align_unsorted.output.bam
+    output:
+        txt = outdir + os.sep + "Q6-dupl_rate" + os.sep + "{samplename}.dup_metrics.txt"
+    params:
+        outdir = outdir + os.sep + "Q6-dupl_rate"
+    run:
+        # This definitely isn't the most efficient way to calculate duplicate rate, but it works
+        # We are going to generate a Picard-style output file
+        # First, parse the final (collapsed) BAM, and calculate the total number of reads
+        col_bam = pysam.AlignmentFile(input.collapsed_bam)
+        consensus_reads = col_bam.count(until_eof=True, read_callback=lambda x: not x.is_duplicate and x.is_mapped and x.is_paired and not x.is_supplementary and not x.is_secondary)
+        col_read_pairs = consensus_reads / 2
+        col_unpaired_reads = col_bam.count(until_eof=True, read_callback=lambda x: not x.is_paired and not x.is_supplementary and not x.is_secondary)
+
+        # Now, parse the original (non-consensus) BAM, and calculate the total number
+        # of read pairs, unmapped reads, and unpaired reads
+        orig_bam = pysam.AlignmentFile(input.all_reads_bam, require_index=False)
+        orig_reads = orig_bam.count(until_eof=True, read_callback=lambda x: not x.is_duplicate and x.is_mapped and x.is_paired and not x.is_supplementary and not x.is_secondary)
+        orig_pairs = orig_reads / 2
+        unmapped_reads = orig_bam.count(until_eof=True, read_callback=lambda x: x.is_unmapped and not x.is_supplementary and not x.is_secondary)
+        unpaired_reads = orig_bam.count(until_eof=True, read_callback=lambda x: not x.is_paired and not x.is_supplementary and not x.is_secondary)
+        secondary_reads = orig_bam.count(until_eof=True, read_callback=lambda x: x.is_supplementary or x.is_secondary)
+
+        # Now, calculate the output stats
+        library = wildcards.samplename
+        read_pairs_examined = int(orig_pairs)
+        secondary_or_supplemental = secondary_reads
+        unpaired_dups = int(unpaired_reads - col_unpaired_reads)
+        read_pair_dups = int(orig_pairs - col_read_pairs)
+        optical_dup = 0  # In this consensus approach (via UMIs) we lose info on which are optical duplicates
+        per_dupl = read_pair_dups / orig_pairs
+        # Custom added by Chris. Calculate the total size of this library, and how much we have sequenced
+        estimated_library_size = int(estimateLibrarySize(orig_pairs, col_read_pairs))  # Use MultiQC's function to calculate the library size
+        prop_library_seq = col_read_pairs / estimated_library_size
+
+        # Close input
+        col_bam.close()
+        orig_bam.close()
+
+        # Write output
+        with open(output.txt, "w") as o:
+            # To trick MultiQC into thinking this is a Picard output
+            o.write("##picard.sam.markduplicates.MarkDuplicates BUT NOT ACTUALLY PICARD")
+            o.write(os.linesep)
+            header = ["LIBRARY", "UNPAIRED_READS_EXAMINED", "READ_PAIRS_EXAMINED", "SECONDARY_OR_SUPPLEMENTARY_RDS", "UNMAPPED_READS", "UNPAIRED_READ_DUPLICATES", "READ_PAIR_DUPLICATES",
+                      "READ_PAIR_OPTICAL_DUPLICATES", "PERCENT_DUPLICATION", "ESTIMATED_LIBRARY_SIZE", "PERCENT_LIBRARY_SEQUENCED"]
+            o.write("\t".join(header))
+            o.write(os.linesep)
+            # Write out stats for this sample
+            out_values = [library, str(unpaired_reads), str(read_pairs_examined), str(secondary_or_supplemental), str(unmapped_reads),
+                          str(unpaired_dups), str(read_pair_dups), str(optical_dup), str(per_dupl), str(estimated_library_size), str(prop_library_seq)]
+            o.write("\t".join(out_values))
+            o.write(os.linesep)
+
+# Output sentinel confirming that the final BAMs are valid
+rule qc_validate_sam:
+    input:
+        bam = rules.picard_annotate_bam.output.bam,
+        refgenome = config["cappseq_umi_workflow"]["refgenome"]
+    output:
+        txt = outdir + os.sep + "Q7-validatesam" + os.sep + "{samplename}.consensus.mapped.ValidateSamFile.is_valid"
+    params:
+        outdir = outdir + os.sep + "Q7-validatesam"
+    conda:
+        "envs/bwa_picard_fgbio.yaml"
+    log:
+        outdir + os.sep + "logs" + os.sep + "{samplename}.picardvalidatesam.log"
+    shell:
+        "picard ValidateSamFile -I {input.bam} -R {input.refgenome} > {output.txt} 2> {log}"
+
+# Merge QC results via multiqc
+checkpoint qc_multiqc:
+    input:
+        dupl = expand(outdir + os.sep + "Q6-dupl_rate" + os.sep + "{samplename}.dup_metrics.txt", samplename=samplelist),
+        errorate = expand(outdir + os.sep + "Q5-error_rate" + os.sep + "{samplename}.error_rate_by_read_position.txt", samplename=samplelist),
+        insertsize = expand(outdir + os.sep + "Q4-insert_size" + os.sep + "{samplename}.insert_size_metrics.txt", samplename=samplelist),
+        oxog = expand(outdir + os.sep + "Q3-oxog_metrics" + os.sep + "{samplename}.oxoG_metrics.txt", samplename=samplelist),
+        hsmet = expand(outdir + os.sep + "Q2-hs_metrics" + os.sep + "{samplename}.hs_metrics.txt", samplename=samplelist),
+        fastqc = expand(outdir + os.sep + "Q1-fastqc" + os.sep + "{samplename}.bwa.unsort_fastqc.html", samplename=samplelist),
+        validatesam = expand(outdir + os.sep + "Q7-validatesam" + os.sep + "{samplename}.consensus.mapped.ValidateSamFile.is_valid", samplename=samplelist)
+    output:
+        html = outdir + os.sep + "Q9-multiqc" + os.sep + "multiqc_report.html",
+    params:
+        outdir = outdir + os.sep + "Q9-multiqc",
+        modules = "-m picard -m fastqc -m fgbio",  # Should start with -m flag
+        config = config["cappseq_umi_workflow"]["multiqc_config"],
+        dupl_dir = rules.qc_calc_dupl.params.outdir,
+        errorrate_dir = rules.qc_fgbio_errorrate.params.outdir,
+        insertsize_dir = rules.qc_picard_insertsize.params.outdir,
+        oxog_dir = rules.qc_picard_oxog.params.outdir,
+        hsmet_dir = rules.qc_picard_hsmetrics.params.outdir,
+        fastqc_dir = rules.qc_fastqc.params.outdir,
+        validsam_dir = rules.qc_validate_sam.params.outdir
+    conda:
+        "envs/picard_fastqc.yaml"
+    log:
+        outdir + os.sep + "logs" + os.sep + "multiqc_all.log"
+    shell:
+        "multiqc --config {params.config} --outdir {params.outdir} --force {params.modules} {params.dupl_dir} {params.errorrate_dir} {params.insertsize_dir} {params.oxog_dir} {params.hsmet_dir} {params.fastqc_dir} {params.validsam_dir} > {log}"
 
 rule all:
     input:
         expand([str(rules.picard_annotate_bam.output.bam),
-                str(rules.samtools_calculate_duplicate_rate.output.txt),
-                str(rules.picard_validate_sam.output.txt)], 
+                str(rules.qc_multiqc.output.html)],
             samplename= samplelist)

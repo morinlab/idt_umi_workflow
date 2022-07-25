@@ -1,6 +1,8 @@
 cappseq_umi_workflow:
   refgenome: "/morinlab/reference/igenomes/Homo_sapiens/GSC/GRCh38/Sequence/BWAIndex/GRCh38_no_alt.fa"
-  conda_yaml: ""
+  captureregions: "/mnt/thanos_lv/pipelines/DLBCL_Montreal/PlasmaTwistCAPPSeq/coverage/00-helperfiles/twist_panel_design.noalt.sort.annot.bed4"
+  captureregionsil: "/mnt/thanos_lv/pipelines/DLBCL_Montreal/PlasmaTwistCAPPSeq/coverage/00-helperfiles/twist_panel_design.noalt.sort.annot.interval_list"
+  dbsnpvcf: "/morinlab/reference/igenomes/Homo_sapiens/GSC/GRCh38/Annotation/Variation/dbsnp.all.151.chr.vcf.gz"  # Should be BGzipped and TABIX indexed
 
   # Input and output
   datadir: "/mnt/thanos_lv/raw_data/DLBCL_Montreal/PlasmaTargetPanelFastqs/"
@@ -29,3 +31,4 @@ cappseq_umi_workflow:
   max_base_qual: 70
   tags_to_remove: {'ad', 'ac', 'bd', 'ae', 'be', 'bq', 'bc', 'aq'}
 
+  multiqc_config: "config/multiqc_config.yaml"
