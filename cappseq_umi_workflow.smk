@@ -11,13 +11,39 @@ configfile: "config/cappseq_umi_config.yaml"
 
 
 # Load samples
+# This assumes the sample file has three columns:
+# sample_id    R1_fastq_path    R2_fastq_path
+samplefile = config["cappseq_umi_workflow"]["samplefile"]
 samplelist = []
-with open(config["cappseq_umi_workflow"]["samplefile"]) as f:
+r1_fastqs = {}
+r2_fastqs = {}
+
+with open(samplefile) as f:
+    i = 0  # Line counter
     for line in f:
+        i += 1
         line = line.rstrip("\n").rstrip("\r")
         if line.startswith("#"):  # Ignore comment lines
             continue
-        samplelist.append(line)
+        try:
+            cols = line.split("\t")
+            sample_id = cols[0]
+            r1_fastq = cols[1]
+            r2_fastq = cols[2]
+        except IndexError as e:
+            raise AttributeError(f"Unable to parse line {i} of sample file \'{samplefile}\'. Expecting three tab-delineated columns corresponding to \'sample_id\', \'R1_fastq\', and \'R2_fastq\'") from e
+        # Check that the specified FASTQs exist
+        if not os.path.exists(r1_fastq):
+            raise AttributeError(f"Unable to parse line {i} of sample file \'{samplefile}\': Unable to locate \'{r1_fastq}\': No such file or directory")
+        if not os.path.exists(r2_fastq):
+            raise AttributeError(f"Unable to parse line {i} of sample file \'{samplefile}\': Unable to locate \'{r2_fastq}\': No such file or directory")
+
+        # Check that this sample doesn't already exist
+        if sample_id in r1_fastqs:
+            raise AttributeError(f"Duplicate sample ID \'{sample_id}\' in sample file \'{samplefile}")
+        samplelist.append(sample_id)
+        r1_fastqs[sample_id] = r1_fastq
+        r2_fastqs[sample_id] = r2_fastq
 
 outdir = config["cappseq_umi_workflow"]["baseoutdir"]
 
@@ -58,6 +84,7 @@ def generate_read_group(fastq, sample):
 
     readgroup = f"@RG\\tID:{sample}\\tBC:{barcode}\\tCN:{centre}\\tDS:\'{description}\'\\tDT:{date}\\tLB:{sample}\\tPL:{platform}\\tPM:{platformmodel}\\tPU:{platformunit}\\tSM:{sample}"
     return readgroup
+
 
 # Adapted from the multiQC module
 # Used to calculate the estimated total number of molecules in a library
@@ -122,17 +149,14 @@ def f(x, c, n):
 
 rule trim_umi:
     input:
-        r1 = lambda w: glob.glob(config["cappseq_umi_workflow"]["datadir"] + os.sep + w.samplename + "*R1_001.fastq.gz"),
-        r2 = lambda w: glob.glob(config["cappseq_umi_workflow"]["datadir"] + os.sep + w.samplename + "*R2_001.fastq.gz")
+        r1 = lambda w: r1_fastqs[w.samplename],
+        r2 = lambda w: r2_fastqs[w.samplename]
     output:
         r1 = temp(outdir + os.sep + "01-trimmedfastqs" + os.sep + "{samplename}.r1.trimmed.fastq.gz"),
         r2 = temp(outdir + os.sep + "01-trimmedfastqs" + os.sep + "{samplename}.r2.trimmed.fastq.gz")
     params:
         barcodelength = config["cappseq_umi_workflow"]["barcodelength"]
     run:
-        # Because globs are weird
-        input.r1 = input.r1[0]
-        input.r2 = input.r2[0]
         # Sanity check barcode
         barcodelength = int(params.barcodelength)
         if barcodelength <= 0:
@@ -187,8 +211,8 @@ rule bwa_align_unsorted:
 rule fgbio_annotate_umis:
     input:
         bam = rules.bwa_align_unsorted.output.bam,
-        r1 = lambda w: glob.glob(config["cappseq_umi_workflow"]["datadir"] + os.sep + w.samplename + "*R1_001.fastq.gz"),
-        r2 = lambda w: glob.glob(config["cappseq_umi_workflow"]["datadir"] + os.sep + w.samplename + "*R2_001.fastq.gz"),
+        r1 = lambda w: r1_fastqs[w.samplename],
+        r2 = lambda w: r2_fastqs[w.samplename]
     output:
         bam = temp(outdir + os.sep + "03-withumis" + os.sep + "{samplename}.bwa.umi.namesort.bam")
     params:
@@ -529,3 +553,5 @@ rule all:
         expand([str(rules.picard_annotate_bam.output.bam),
                 str(rules.qc_multiqc.output.html)],
             samplename= samplelist)
+    default_target: True
+

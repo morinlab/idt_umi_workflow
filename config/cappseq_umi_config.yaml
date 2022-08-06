@@ -5,14 +5,13 @@ cappseq_umi_workflow:
   dbsnpvcf: "/morinlab/reference/igenomes/Homo_sapiens/GSC/GRCh38/Annotation/Variation/dbsnp.all.151.chr.vcf.gz"  # Should be BGzipped and TABIX indexed
 
   # Input and output
-  datadir: "/mnt/thanos_lv/raw_data/DLBCL_Montreal/PlasmaTargetPanelFastqs/"
-  samplefile: "/mnt/thanos_lv/pipelines/DLBCL_Montreal/PlasmaTwistCAPPSeq/BAMs/samplelist.txt"
+  samplefile: "/mnt/thanos_lv/pipelines/DLBCL_Montreal/PlasmaTwistCAPPSeq/BAMs/samplelist.newformat.txt"
   baseoutdir: "/mnt/thanos_lv/pipelines/DLBCL_Montreal/PlasmaTwistCAPPSeq/BAMs"
 
   readgroup:
-    centre: "MCGILL"
+    centre: "Genome_Quebec"
     platformunit: "ILLUMINA"
-    platformmodel: "MISEQ"
+    platformmodel: "NOVASEQ"
     description: "CAPPSeq of lymphoma-associated genes"
 
   # Threads
