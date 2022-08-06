@@ -3,7 +3,6 @@
 import os
 import gzip
 import datetime
-import glob
 import pysam
 import math
 
@@ -196,7 +195,7 @@ rule bwa_align_unsorted:
     output:
         bam = outdir + os.sep + "02-BWA" + os.sep + "{samplename}.bwa.unsort.bam"
     params:
-        readgroup = lambda w: generate_read_group(glob.glob(config["cappseq_umi_workflow"]["datadir"] + os.sep + w.samplename + "*R1_001.fastq.gz")[0], w.samplename),
+        readgroup = lambda w: generate_read_group(r1_fastqs[w.samplename], w.samplename),
     threads:
         config["cappseq_umi_workflow"]["bwa_threads"]
     conda:
@@ -317,7 +316,7 @@ rule bwa_realign_bam:
     threads:
         config["cappseq_umi_workflow"]["bwa_threads"]
     params:
-        readgroup = lambda w: generate_read_group(glob.glob(config["cappseq_umi_workflow"]["datadir"] + os.sep + w.samplename + "*R1_001.fastq.gz")[0], w.samplename)
+        readgroup = lambda w: generate_read_group(r1_fastqs[w.samplename], w.samplename)
     conda:
         "envs/bwa_picard_fgbio.yaml"
     log:
