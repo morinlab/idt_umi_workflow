@@ -1,5 +1,5 @@
 # IDT UMI workflow
-Snakemake workflow for processing CAPPSeq data sequenced using IDT's UMIs
+Snakemake workflow for processing CAPPSeq data sequenced using IDT's UMIs. Note that this workflow requires paired-end FASTQ files which have been prepared using IDT's UMI structure
 
 
 ## Configuration
