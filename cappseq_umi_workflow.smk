@@ -230,9 +230,11 @@ rule fgbio_group_umis:
         bam = rules.fgbio_annotate_umis.output.bam,
         refgenome = config["cappseq_umi_workflow"]["refgenome"]
     output:
-        bam = temp(outdir + os.sep + "04-umigrouped" + os.sep + "{samplename}.umigrouped.sort.bam")
+        bam = temp(outdir + os.sep + "04-umigrouped" + os.sep + "{samplename}.umigrouped.sort.bam"),
+        txt = outdir + os.sep + "04-umigrouped" + os.sep + "{samplename}.umigrouped.famsize.txt"
     params:
-        maxedits = config["cappseq_umi_workflow"]["umiedits"]
+        maxedits = config["cappseq_umi_workflow"]["umiedits"],
+        outdir = outdir + os.sep + "04-umigrouped"
     threads:
         config["cappseq_umi_workflow"]["samtools_sort_threads"]
     conda:
@@ -240,7 +242,7 @@ rule fgbio_group_umis:
     log:
         outdir + os.sep + "logs" + os.sep + "{samplename}.groupumis.log"
     shell:
-        "samtools sort -@ {threads} -n {input.bam} | fgbio SetMateInformation --ref {input.refgenome} | fgbio GroupReadsByUmi --edits {params.maxedits} --strategy paired > {output.bam} 2> {log}"
+        "samtools sort -@ {threads} -n {input.bam} | fgbio SetMateInformation --ref {input.refgenome} | fgbio GroupReadsByUmi --edits {params.maxedits} --family-size-histogram {output.txt} --strategy paired > {output.bam} 2> {log}"
 
 # Generate a consensus of these families
 rule fgbio_duplex_consensus:
@@ -527,7 +529,8 @@ checkpoint qc_multiqc:
         oxog = expand(outdir + os.sep + "Q3-oxog_metrics" + os.sep + "{samplename}.oxoG_metrics.txt", samplename=samplelist),
         hsmet = expand(outdir + os.sep + "Q2-hs_metrics" + os.sep + "{samplename}.hs_metrics.txt", samplename=samplelist),
         fastqc = expand(outdir + os.sep + "Q1-fastqc" + os.sep + "{samplename}.bwa.unsort_fastqc.html", samplename=samplelist),
-        validatesam = expand(outdir + os.sep + "Q7-validatesam" + os.sep + "{samplename}.consensus.mapped.ValidateSamFile.is_valid", samplename=samplelist)
+        validatesam = expand(outdir + os.sep + "Q7-validatesam" + os.sep + "{samplename}.consensus.mapped.ValidateSamFile.is_valid", samplename=samplelist),
+        famsizehist = expand(outdir + os.sep + "04-umigrouped" + os.sep + "{samplename}.umigrouped.famsize.txt", samplename=samplelist)
     output:
         html = outdir + os.sep + "Q9-multiqc" + os.sep + "multiqc_report.html",
     params:
@@ -540,13 +543,14 @@ checkpoint qc_multiqc:
         oxog_dir = rules.qc_picard_oxog.params.outdir,
         hsmet_dir = rules.qc_picard_hsmetrics.params.outdir,
         fastqc_dir = rules.qc_fastqc.params.outdir,
-        validsam_dir = rules.qc_validate_sam.params.outdir
+        validsam_dir = rules.qc_validate_sam.params.outdir,
+        famsize_dir = rules.fgbio_group_umis.params.outdir
     conda:
         "envs/picard_fastqc.yaml"
     log:
         outdir + os.sep + "logs" + os.sep + "multiqc_all.log"
     shell:
-        "multiqc --config {params.config} --outdir {params.outdir} --force {params.modules} {params.dupl_dir} {params.errorrate_dir} {params.insertsize_dir} {params.oxog_dir} {params.hsmet_dir} {params.fastqc_dir} {params.validsam_dir} > {log}"
+        "multiqc --config {params.config} --outdir {params.outdir} --force {params.modules} {params.dupl_dir} {params.errorrate_dir} {params.insertsize_dir} {params.oxog_dir} {params.hsmet_dir} {params.fastqc_dir} {params.validsam_dir} {params.famsize_dir} > {log}"
 
 rule all:
     input:
