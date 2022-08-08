@@ -61,7 +61,7 @@ def generate_read_group(fastq, sample):
     else:
         readname = open(fastq, "r").readline()
 
-    # Parse out the ttributes for the read group from the read name
+    # Parse out the attributes for the read group from the read name
     readname = readname.rstrip("\n").rstrip("\r")
     cols = readname.split(":")
 
@@ -236,12 +236,14 @@ rule fgbio_group_umis:
         outdir = outdir + os.sep + "04-umigrouped"
     threads:
         config["cappseq_umi_workflow"]["samtools_sort_threads"]
+    resources:
+        mem_mb = "2G"
     conda:
         "envs/bwa_picard_fgbio.yaml"
     log:
         outdir + os.sep + "logs" + os.sep + "{samplename}.groupumis.log"
     shell:
-        "samtools sort -@ {threads} -n {input.bam} | fgbio SetMateInformation --ref {input.refgenome} | fgbio GroupReadsByUmi --edits {params.maxedits} --family-size-histogram {output.txt} --strategy paired > {output.bam} 2> {log}"
+        "samtools sort -m {resources.mem_mb} -@ {threads} -n {input.bam} | fgbio SetMateInformation --ref {input.refgenome} 2> {log} | fgbio GroupReadsByUmi --edits {params.maxedits} --family-size-histogram {output.txt} --strategy paired > {output.bam} 2>> {log}"
 
 # Generate a consensus of these families
 rule fgbio_duplex_consensus:
@@ -549,7 +551,7 @@ checkpoint qc_multiqc:
     log:
         outdir + os.sep + "logs" + os.sep + "multiqc_all.log"
     shell:
-        "multiqc --config {params.config} --outdir {params.outdir} --force {params.modules} {params.dupl_dir} {params.errorrate_dir} {params.insertsize_dir} {params.oxog_dir} {params.hsmet_dir} {params.fastqc_dir} {params.validsam_dir} {params.famsize_dir} > {log}"
+        "multiqc --interactive --config {params.config} --outdir {params.outdir} --force {params.modules} {params.dupl_dir} {params.errorrate_dir} {params.insertsize_dir} {params.oxog_dir} {params.hsmet_dir} {params.fastqc_dir} {params.validsam_dir} {params.famsize_dir} > {log}"
 
 rule all:
     input:

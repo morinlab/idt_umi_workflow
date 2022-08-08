@@ -55,9 +55,6 @@ extra_fn_clean_exts:
     - ".consensus.mapped.ValidateSamFile.is_valid"
 
 table_columns_name:
-    FastQC:
-       # Hide since this a bit misleading
-       percent_duplicates: "Duplicate rate (without UMIs)"
     Picard:
        PERCENT_DUPLICATION: "Duplicate rate (with UMIs)"
 
