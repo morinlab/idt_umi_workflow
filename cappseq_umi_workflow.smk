@@ -6,8 +6,18 @@ import datetime
 import pysam
 import math
 
-configfile: "config/cappseq_umi_config.yaml"
+configpath = "config/cappseq_umi_config.yaml"
+configfile: configpath
 
+# Ensure config file is correct, and all required attributes are present
+pathkeys = {"refgenome", "captureregions", "captureregionsil", "dbsnpvcf", "samplefile", "baseoutdir"}  # config elements that are filepaths
+for ckey, attribute in config["cappseq_umi_workflow"].items():
+    if attribute == "__UPDATE__":
+        raise AttributeError(f"\'__UPDATE__\' found for \'{ckey}\' in config file \'{configpath}\'. Please ensure the config file is updated with parameters relevant for your analysis")
+    # Check that required filepaths exist
+    if ckey in pathkeys:
+        if not os.path.exists(attribute):
+            raise AttributeError(f"Unable to locate \'{attribute}\' for key \'{ckey}\' in config file \'{configpath}\': No such file or directory")
 
 # Load samples
 # This assumes the sample file has three columns:
