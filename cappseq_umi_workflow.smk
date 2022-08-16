@@ -213,7 +213,7 @@ rule bwa_align_unsorted:
     log:
         outdir + os.sep + "logs" + os.sep + "{samplename}.bwa_allreads.log"
     shell:
-        "bwa mem -t {threads} -R \"{params.readgroup}\" {input.refgenome} {input.r1} {input.r2} 2> {log} | samtools view -b > {output.bam} 2> {log}"
+        "bwa mem -t {threads} -R \"{params.readgroup}\" {input.refgenome} {input.r1} {input.r2} 2> {log} | samtools view -b > {output.bam} 2>> {log}"
 
 
 # Add UMI tag
