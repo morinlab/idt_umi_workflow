@@ -161,8 +161,8 @@ rule trim_umi:
         r1 = lambda w: r1_fastqs[w.samplename],
         r2 = lambda w: r2_fastqs[w.samplename]
     output:
-        r1 = temp(outdir + os.sep + "01-trimmedfastqs" + os.sep + "{samplename}.r1.trimmed.fastq.gz"),
-        r2 = temp(outdir + os.sep + "01-trimmedfastqs" + os.sep + "{samplename}.r2.trimmed.fastq.gz")
+        r1 = temp(outdir + os.sep + "01-trimmedfastqs" + os.sep + "{samplename}.r1.trimmed.fastq"),
+        r2 = temp(outdir + os.sep + "01-trimmedfastqs" + os.sep + "{samplename}.r2.trimmed.fastq")
     params:
         barcodelength = config["cappseq_umi_workflow"]["barcodelength"]
     run:
