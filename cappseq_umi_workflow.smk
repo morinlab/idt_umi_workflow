@@ -161,8 +161,8 @@ rule trim_umi:
         r1 = lambda w: r1_fastqs[w.samplename],
         r2 = lambda w: r2_fastqs[w.samplename]
     output:
-        r1 = temp(outdir + os.sep + "01-trimmedfastqs" + os.sep + "{samplename}.r1.trimmed.fastq"),
-        r2 = temp(outdir + os.sep + "01-trimmedfastqs" + os.sep + "{samplename}.r2.trimmed.fastq")
+        r1 = temp(outdir + os.sep + "01-trimmedfastqs" + os.sep + "{samplename}.R1.trimmed.fastq"),
+        r2 = temp(outdir + os.sep + "01-trimmedfastqs" + os.sep + "{samplename}.R2.trimmed.fastq")
     params:
         barcodelength = config["cappseq_umi_workflow"]["barcodelength"]
     run:
@@ -277,14 +277,15 @@ rule fgbio_duplex_consensus:
 # Because CallDuplexConsensusReads recalculates base qualities, and those numbers can be above those supported by certain tools, set a upper
 # limit to base qualities.
 # Also, remove all the extra space-taking tags
-rule cap_base_qual:
+rule sanitize_bam:
     input:
         bam = rules.fgbio_duplex_consensus.output.bam
     output:
         bam = outdir + os.sep + "06-sanitizebam" + os.sep + "{samplename}.consensus.unmapped.capqual.bam"
     params:
-        max_base_qual = int(config["cappseq_umi_workflow"]["max_base_qual"]),
-        tagstoremove = config["cappseq_umi_workflow"]["tags_to_remove"]
+        max_base_qual = int(config["cappseq_umi_workflow"]["max_base_qual"]),  # Bases with quality scores above this are capped at this
+        tagstoremove = config["cappseq_umi_workflow"]["tags_to_remove"],
+        min_base_qual = int(config["cappseq_umi_workflow"]["min_base_qual"])  # Bases with quality scores below this are masked
     threads:
         config["cappseq_umi_workflow"]["basequal_threads"]
     run:
@@ -305,6 +306,9 @@ rule cap_base_qual:
         for read in inFile.fetch(until_eof=True):
             # Cap the upper limit of base qualities
             outqual = list(qual if qual <= params.max_base_qual else params.max_base_qual for qual in read.query_qualities)
+            # Mask bases with quality scores below the specified threshold
+            masked_seq = "".join(read.query_sequence[i] if read.query_qualities[i] >= 20 else "N" for i in range(0, read.query_length))
+            read.query_sequence = masked_seq
             read.query_qualities = outqual
 
             # Remove the unwanted tags
@@ -323,7 +327,7 @@ rule cap_base_qual:
 # Covert unaligned BAM back to FASTQ and map reads
 rule bwa_realign_bam:
     input:
-        bam = rules.cap_base_qual.output.bam,
+        bam = rules.sanitize_bam.output.bam,
         refgenome = config["cappseq_umi_workflow"]["refgenome"]
     output:
         bam = temp(outdir + os.sep + "07-consensus_aligned" + os.sep + "{samplename}.consensus.mapped.namesort.bam")
@@ -342,7 +346,7 @@ rule bwa_realign_bam:
 # Add back in family information from the unaligned consensus BAM
 rule picard_annotate_bam:
     input:
-        unaligned_bam = rules.cap_base_qual.output.bam,
+        unaligned_bam = rules.sanitize_bam.output.bam,
         aligned_bam = rules.bwa_realign_bam.output.bam,
         refgenome = config["cappseq_umi_workflow"]["refgenome"]
     output:
