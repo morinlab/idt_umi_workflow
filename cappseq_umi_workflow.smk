@@ -203,7 +203,7 @@ rule bwa_align_unsorted:
         r2 = rules.trim_umi.output.r2,
         refgenome = config["cappseq_umi_workflow"]["refgenome"]
     output:
-        bam = outdir + os.sep + "02-BWA" + os.sep + "{samplename}.bwa.unsort.bam"
+        bam = temp(outdir + os.sep + "02-BWA" + os.sep + "{samplename}.bwa.unsort.bam")
     params:
         readgroup = lambda w: generate_read_group(r1_fastqs[w.samplename], w.samplename),
     threads:
@@ -239,7 +239,7 @@ rule fgbio_group_umis:
         bam = rules.fgbio_annotate_umis.output.bam,
         refgenome = config["cappseq_umi_workflow"]["refgenome"]
     output:
-        bam = temp(outdir + os.sep + "04-umigrouped" + os.sep + "{samplename}.umigrouped.sort.bam"),
+        bam = outdir + os.sep + "04-umigrouped" + os.sep + "{samplename}.umigrouped.sort.bam",
         txt = outdir + os.sep + "04-umigrouped" + os.sep + "{samplename}.umigrouped.famsize.txt"
     params:
         maxedits = config["cappseq_umi_workflow"]["umiedits"],
@@ -281,7 +281,7 @@ rule sanitize_bam:
     input:
         bam = rules.fgbio_duplex_consensus.output.bam
     output:
-        bam = outdir + os.sep + "06-sanitizebam" + os.sep + "{samplename}.consensus.unmapped.capqual.bam"
+        bam = temp(outdir + os.sep + "06-sanitizebam" + os.sep + "{samplename}.consensus.unmapped.capqual.bam")
     params:
         max_base_qual = int(config["cappseq_umi_workflow"]["max_base_qual"]),  # Bases with quality scores above this are capped at this
         tagstoremove = config["cappseq_umi_workflow"]["tags_to_remove"],
