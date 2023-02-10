@@ -26,7 +26,16 @@ samplefile = config["cappseq_umi_workflow"]["samplefile"]
 samplelist = []
 r1_fastqs = {}
 r2_fastqs = {}
+sample_to_runid = {}
 
+
+def is_gzipped(filepath):
+    with open(filepath, "rb") as f:
+        magicnum = f.read(2)
+        return magicnum == b'\x1f\x8b'  # Magic number of gzipped files
+
+
+# Process sample file
 with open(samplefile) as f:
     i = 0  # Line counter
     for line in f:
@@ -39,8 +48,9 @@ with open(samplefile) as f:
             sample_id = cols[0]
             r1_fastq = cols[1]
             r2_fastq = cols[2]
+            run_id = cols[3]
         except IndexError as e:
-            raise AttributeError(f"Unable to parse line {i} of sample file \'{samplefile}\'. Expecting three tab-delineated columns corresponding to \'sample_id\', \'R1_fastq\', and \'R2_fastq\'") from e
+            raise AttributeError(f"Unable to parse line {i} of sample file \'{samplefile}\'. Expecting three tab-delineated columns corresponding to \'sample_id\', \'R1_fastq\', \'R2_fastq\', and \'run_id\'") from e
         # Check that the specified FASTQs exist
         if not os.path.exists(r1_fastq):
             raise AttributeError(f"Unable to parse line {i} of sample file \'{samplefile}\': Unable to locate \'{r1_fastq}\': No such file or directory")
@@ -54,13 +64,10 @@ with open(samplefile) as f:
         r1_fastqs[sample_id] = r1_fastq
         r2_fastqs[sample_id] = r2_fastq
 
+        # Store the runID for this sample
+        sample_to_runid[sample_id] = run_id
+
 outdir = config["cappseq_umi_workflow"]["baseoutdir"]
-
-
-def is_gzipped(filepath):
-    with open(filepath, "rb") as f:
-        magicnum = f.read(2)
-        return magicnum == b'\x1f\x8b'  # Magic number of gzipped files
 
 
 def generate_read_group(fastq, sample):
@@ -157,44 +164,36 @@ def f(x, c, n):
 
 
 rule trim_umi:
+    """
+    Trim the UMI from the front (and end) of each read pair
+    Also does some FASTQ cleanup (polyG tails etc)
+
+    Note that we are using --trim_front here instead of --umi, as we do not want the UMI stored in the read name
+    as then we can't use fgbio AnnotateBamWithUMIs, as the read names will be different from the FASTQ file
+    (In theory we could use CopyUmiFromReadName, but that requires a "-" deliminator between the forward and reverse
+    UMIs while fastp uses a "_" so, ¯\_(ツ)_/¯ )
+    """
     input:
         r1 = lambda w: r1_fastqs[w.samplename],
         r2 = lambda w: r2_fastqs[w.samplename]
     output:
-        r1 = temp(outdir + os.sep + "01-trimmedfastqs" + os.sep + "{samplename}.R1.trimmed.fastq"),
-        r2 = temp(outdir + os.sep + "01-trimmedfastqs" + os.sep + "{samplename}.R2.trimmed.fastq")
+        r1 = temp(os.path.join(outdir, "01-trimmedfastqs", "{samplename}.R1.trimmed.fastq.gz")),
+        r2 = temp(os.path.join(outdir, "01-trimmedfastqs", "{samplename}.R2.trimmed.fastq.gz")),
+        fastp_report = os.path.join(outdir, "01-trimmedfastqs", "{samplename}.fastp.json")
     params:
-        barcodelength = config["cappseq_umi_workflow"]["barcodelength"]
-    run:
-        # Sanity check barcode
-        barcodelength = int(params.barcodelength)
-        if barcodelength <= 0:
-            raise AttributeError("\'barcodelength\' must be greater than 0")
-        # Trim read1
-        open_func = lambda x: gzip.open(x, "rt") if is_gzipped(x) else open(x)
-        write_func = lambda x: gzip.open(x, "wt") if x.endswith(".gz") else open(x, "w")
-        with open_func(input.r1) as f:
-            with write_func(output.r1) as o:
-                # WARNING: WILL NOT WORK WITH READS SHORTER THAN 8BP. WILL BREAK.
-                i = 0
-                for line in f:
-                    i += 1
-                    # Trim the sequence and quality lines for each read
-                    if i % 2 == 0:
-                        line = line[barcodelength:]
-                    o.write(line)
-
-        # Trim read2
-        with open_func(input.r2) as f:
-            with write_func(output.r2) as o:
-                # WARNING: WILL NOT WORK WITH READS SHORTER THAN 8BP. WILL BREAK.
-                i = 0
-                for line in f:
-                    i += 1
-                    # Trim the sequence and quality lines for each read
-                    if i % 2 == 0:
-                        line = line[barcodelength:]
-                    o.write(line)
+        barcodelength = config["cappseq_umi_workflow"]["barcodelength"],
+        outdir = os.path.join(outdir, "01-trimmedfastqs")
+    threads: 4
+    conda:
+        "envs/fastp.yaml"
+    log:
+        os.path.join(outdir, "logs", "{samplename}.fastp.log")
+    shell: """
+fastp --overrepresentation_analysis --detect_adapter_for_pe --trim_front1 {params.barcodelength} \
+--trim_front2 {params.barcodelength} --in1 {input.r1} --in2 {input.r2} --thread {threads} --out1 {output.r1} --out2 {output.r2} \
+--report_title "fastp {wildcards.samplename}" --json {output.fastp_report} --trim_poly_x \
+--qualified_quality_phred 20 2> {log}
+"""
 
 
 rule bwa_align_unsorted:
@@ -231,7 +230,7 @@ rule fgbio_annotate_umis:
     log:
         outdir + os.sep + "logs" + os.sep + "{samplename}.annotateumis.log"
     shell:
-        "fgbio AnnotateBamWithUmis --input {input.bam} --fastq {input.r1} --fastq {input.r2} --sorted true --read-structure {params.umiloc} --output {output.bam} &> {log}"
+        "fgbio AnnotateBamWithUmis --input {input.bam} --fastq {input.r1} --fastq {input.r2} --read-structure {params.umiloc} --output {output.bam} &> {log}"
 
 # Group reads by UMI into families
 rule fgbio_group_umis:
@@ -340,8 +339,8 @@ rule bwa_realign_bam:
     log:
         outdir + os.sep + "logs" + os.sep + "{samplename}.bwa_realign.log"
     shell:
-        "samtools fastq -@ {threads} -N {input.bam} | bwa mem -R \"{params.readgroup}\" -p -t {threads} {input.refgenome} - | samtools view -b | "
-        "picard SortSam -SO queryname -I /dev/stdin -O /dev/stdout | fgbio SetMateInformation --ref {input.refgenome} --output {output.bam} &> {log}"
+        "samtools fastq -@ {threads} -N {input.bam} 2> {log} | bwa mem -R \"{params.readgroup}\" -p -t {threads} {input.refgenome} - 2>> {log} | samtools view -b | "
+        "picard SortSam -SO queryname -I /dev/stdin -O /dev/stdout 2>> {log} | fgbio SetMateInformation --ref {input.refgenome} --output {output.bam} &> {log}"
 
 # Add back in family information from the unaligned consensus BAM
 rule picard_annotate_bam:
@@ -538,39 +537,44 @@ rule qc_validate_sam:
 # Merge QC results via multiqc
 checkpoint qc_multiqc:
     input:
-        dupl = expand(outdir + os.sep + "Q6-dupl_rate" + os.sep + "{samplename}.dup_metrics.txt", samplename=samplelist),
-        errorate = expand(outdir + os.sep + "Q5-error_rate" + os.sep + "{samplename}.error_rate_by_read_position.txt", samplename=samplelist),
-        insertsize = expand(outdir + os.sep + "Q4-insert_size" + os.sep + "{samplename}.insert_size_metrics.txt", samplename=samplelist),
-        oxog = expand(outdir + os.sep + "Q3-oxog_metrics" + os.sep + "{samplename}.oxoG_metrics.txt", samplename=samplelist),
-        hsmet = expand(outdir + os.sep + "Q2-hs_metrics" + os.sep + "{samplename}.hs_metrics.txt", samplename=samplelist),
-        fastqc = expand(outdir + os.sep + "Q1-fastqc" + os.sep + "{samplename}.bwa.unsort_fastqc.html", samplename=samplelist),
-        validatesam = expand(outdir + os.sep + "Q7-validatesam" + os.sep + "{samplename}.consensus.mapped.ValidateSamFile.is_valid", samplename=samplelist),
-        famsizehist = expand(outdir + os.sep + "04-umigrouped" + os.sep + "{samplename}.umigrouped.famsize.txt", samplename=samplelist)
+        # Run multiqc once per run, and merge all samples from that run
+        dupl = lambda w: list(os.path.join(outdir, "Q6-dupl_rate", x + ".dup_metrics.txt") for x in samplelist if sample_to_runid[x] == w.runid),
+        errorate = lambda w: list(os.path.join(outdir, "Q5-error_rate", x + ".error_rate_by_read_position.txt") for x in samplelist if sample_to_runid[x] == w.runid),
+        insertsize = lambda w: list(os.path.join(outdir,"Q4-insert_size", x + ".insert_size_metrics.txt") for x in samplelist if sample_to_runid[x] == w.runid),
+        oxog = lambda w: list(os.path.join(outdir, "Q3-oxog_metrics", x + ".oxoG_metrics.txt") for x in samplelist if sample_to_runid[x] == w.runid),
+        hsmet = lambda w: list(os.path.join(outdir, "Q2-hs_metrics", x + ".hs_metrics.txt") for x in samplelist if sample_to_runid[x] == w.runid),
+        fastp = lambda w: list(os.path.join(outdir, "01-trimmedfastqs", x + ".fastp.json") for x in samplelist if sample_to_runid[x] == w.runid),
+        fastqc = lambda w: list(os.path.join(outdir, "Q1-fastqc", x + ".bwa.unsort_fastqc.html") for x in samplelist if sample_to_runid[x] == w.runid),
+        validatesam = lambda w: list(os.path.join(outdir, "Q7-validatesam", x + ".consensus.mapped.ValidateSamFile.is_valid") for x in samplelist if sample_to_runid[x] == w.runid),
+        famsizehist = lambda w: list(os.path.join(outdir, "04-umigrouped", x + ".umigrouped.famsize.txt") for x in samplelist if sample_to_runid[x] == w.runid)
     output:
-        html = outdir + os.sep + "Q9-multiqc" + os.sep + "multiqc_report.html",
+        html = outdir + os.sep + "Q9-multiqc" + os.sep + "multiqc_report.{runid}.html",
     params:
         outdir = outdir + os.sep + "Q9-multiqc",
-        modules = "-m picard -m fastqc -m fgbio",  # Should start with -m flag
+        outname = lambda w: "multiqc_report." + w.runid + ".html",
+        modules = "-m picard -m fastqc -m fgbio -m fastp",  # Should start with -m flag
         config = config["cappseq_umi_workflow"]["multiqc_config"],
         dupl_dir = rules.qc_calc_dupl.params.outdir,
         errorrate_dir = rules.qc_fgbio_errorrate.params.outdir,
         insertsize_dir = rules.qc_picard_insertsize.params.outdir,
         oxog_dir = rules.qc_picard_oxog.params.outdir,
         hsmet_dir = rules.qc_picard_hsmetrics.params.outdir,
+        fastp_dir = rules.trim_umi.params.outdir,
         fastqc_dir = rules.qc_fastqc.params.outdir,
         validsam_dir = rules.qc_validate_sam.params.outdir,
         famsize_dir = rules.fgbio_group_umis.params.outdir
     conda:
         "envs/picard_fastqc.yaml"
     log:
-        outdir + os.sep + "logs" + os.sep + "multiqc_all.log"
+        outdir + os.sep + "logs" + os.sep + "multiqc_{runid}.log"
     shell:
-        "multiqc --interactive --config {params.config} --outdir {params.outdir} --force {params.modules} {params.dupl_dir} {params.errorrate_dir} {params.insertsize_dir} {params.oxog_dir} {params.hsmet_dir} {params.fastqc_dir} {params.validsam_dir} {params.famsize_dir} > {log}"
+        "multiqc --no-data-dir --interactive --config {params.config} --outdir {params.outdir} --filename {params.outname} --force {params.modules} {params.dupl_dir} {params.errorrate_dir} {params.insertsize_dir} {params.oxog_dir} {params.hsmet_dir} {params.fastqc_dir} {params.validsam_dir} {params.famsize_dir} {params.fastp_dir} > {log}"
 
 rule all:
     input:
         expand([str(rules.picard_annotate_bam.output.bam),
                 str(rules.qc_multiqc.output.html)],
-            samplename= samplelist)
+            samplename=samplelist,
+            runid=set(sample_to_runid.values()))
     default_target: True
 

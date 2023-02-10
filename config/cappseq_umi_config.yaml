@@ -28,6 +28,7 @@ cappseq_umi_workflow:
 
   # Cleanup and sanitization
   max_base_qual: 70
+  min_base_qual: 20
   tags_to_remove: {'ad', 'ac', 'bd', 'ae', 'be', 'bq', 'bc', 'aq'}
 
   multiqc_config: "config/multiqc_config.yaml"
