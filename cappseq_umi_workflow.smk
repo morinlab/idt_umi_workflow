@@ -95,7 +95,10 @@ def generate_read_group(fastq, sample):
     platform = config["cappseq_umi_workflow"]["readgroup"]["platformunit"]
     platformmodel = config["cappseq_umi_workflow"]["readgroup"]["platformmodel"]
 
-    date = datetime.datetime.now().date().isoformat()  # I KNOW ITS UGLY BUT I JUST WANT THE DATE IN ISO FORMAT
+    # Get the date this sample was generated.
+    # This isn't perfect, but it should be relatively close to the sequencing date.
+    origpath = os.path.realpath(fastq)
+    date = datetime.date.fromtimestamp(os.path.getctime(origpath)).isoformat()  # Get creation date of FASTQ file
     platformunit = flowcell + "-" + lane + ":" + barcode
 
     readgroup = f"@RG\\tID:{sample}\\tBC:{barcode}\\tCN:{centre}\\tDS:\'{description}\'\\tDT:{date}\\tLB:{sample}\\tPL:{platform}\\tPM:{platformmodel}\\tPU:{platformunit}\\tSM:{sample}"
@@ -552,6 +555,7 @@ checkpoint qc_multiqc:
     params:
         outdir = outdir + os.sep + "Q9-multiqc",
         outname = lambda w: "multiqc_report." + w.runid + ".html",
+        ignoresamples = lambda w: "*\' --ignore-samples \'".join(x for x in samplelist if sample_to_runid[x] != w.runid),
         modules = "-m picard -m fastqc -m fgbio -m fastp",  # Should start with -m flag
         config = config["cappseq_umi_workflow"]["multiqc_config"],
         dupl_dir = rules.qc_calc_dupl.params.outdir,
@@ -568,7 +572,7 @@ checkpoint qc_multiqc:
     log:
         outdir + os.sep + "logs" + os.sep + "multiqc_{runid}.log"
     shell:
-        "multiqc --no-data-dir --interactive --config {params.config} --outdir {params.outdir} --filename {params.outname} --force {params.modules} {params.dupl_dir} {params.errorrate_dir} {params.insertsize_dir} {params.oxog_dir} {params.hsmet_dir} {params.fastqc_dir} {params.validsam_dir} {params.famsize_dir} {params.fastp_dir} > {log}"
+        "multiqc --no-data-dir --interactive --config {params.config} --outdir {params.outdir} --filename {params.outname} --force {params.modules} {params.dupl_dir} {params.errorrate_dir} {params.insertsize_dir} {params.oxog_dir} {params.hsmet_dir} {params.fastqc_dir} {params.validsam_dir} {params.famsize_dir} {params.fastp_dir} --ignore-samples \'{params.ignoresamples}*\' > {log}"
 
 rule all:
     input:
