@@ -5,166 +5,69 @@ import gzip
 import datetime
 import pysam
 import math
+import sys
 
-configpath = "config/cappseq_umi_config.yaml"
-configfile: configpath
+# configpath = "config/cappseq_umi_config.yaml"
+# configfile: configpath
+
+sys.path.append(config["cappseq_umi_workflow"]["repo_dir"])
+import utils.path_utils as pu
+import utils.fastq_utils as fu
 
 # Ensure config file is correct, and all required attributes are present
-pathkeys = {"refgenome", "captureregions", "captureregionsil", "dbsnpvcf", "samplefile", "baseoutdir"}  # config elements that are filepaths
-for ckey, attribute in config["cappseq_umi_workflow"].items():
-    if attribute == "__UPDATE__":
-        raise AttributeError(f"\'__UPDATE__\' found for \'{ckey}\' in config file \'{configpath}\'. Please ensure the config file is updated with parameters relevant for your analysis")
-    # Check that required filepaths exist
-    if ckey in pathkeys:
-        if not os.path.exists(attribute):
-            raise AttributeError(f"Unable to locate \'{attribute}\' for key \'{ckey}\' in config file \'{configpath}\': No such file or directory")
+# pathkeys = {"refgenome", "captureregions", "captureregionsil", "dbsnpvcf", "samplefile", "baseoutdir"}  # config elements that are filepaths
+# for ckey, attribute in config["cappseq_umi_workflow"].items():
+#     if attribute == "__UPDATE__":
+#         raise AttributeError(f"\'__UPDATE__\' found for \'{ckey}\' in config file \'{configpath}\'. Please ensure the config file is updated with parameters relevant for your analysis")
+#     # Check that required filepaths exist
+#     if ckey in pathkeys:
+#         if not os.path.exists(attribute):
+#             raise AttributeError(f"Unable to locate \'{attribute}\' for key \'{ckey}\' in config file \'{configpath}\': No such file or directory")
 
 # Load samples
-# This assumes the sample file has three columns:
-# sample_id    R1_fastq_path    R2_fastq_path
-samplefile = config["cappseq_umi_workflow"]["samplefile"]
-samplelist = []
-r1_fastqs = {}
-r2_fastqs = {}
-sample_to_runid = {}
+# This assumes the sample file has 4 columns:
+# sample_id    R1_fastq_path    R2_fastq_path    run_id
+# initialize sample info object
+SAMPLEINFO = pu.FastQInfo(config["cappseq_umi_workflow"]["samplefile"], config["cappseq_umi_workflow"]["fastq_dirs"])
 
-
-def is_gzipped(filepath):
-    with open(filepath, "rb") as f:
-        magicnum = f.read(2)
-        return magicnum == b'\x1f\x8b'  # Magic number of gzipped files
-
+samplelist = SAMPLEINFO.sample_ids
+r1_fastqs = SAMPLEINFO.R1_fastsq
+r2_fastqs = SAMPLEINFO.R2_fastsq
+sample_to_runid = SAMPLEINFO.sampleID_to_Run
 
 # Process sample file
-with open(samplefile) as f:
-    i = 0  # Line counter
-    for line in f:
-        i += 1
-        line = line.rstrip("\n").rstrip("\r")
-        if line.startswith("#"):  # Ignore comment lines
-            continue
-        try:
-            cols = line.split("\t")
-            sample_id = cols[0]
-            r1_fastq = cols[1]
-            r2_fastq = cols[2]
-            run_id = cols[3]
-        except IndexError as e:
-            raise AttributeError(f"Unable to parse line {i} of sample file \'{samplefile}\'. Expecting three tab-delineated columns corresponding to \'sample_id\', \'R1_fastq\', \'R2_fastq\', and \'run_id\'") from e
-        # Check that the specified FASTQs exist
-        if not os.path.exists(r1_fastq):
-            raise AttributeError(f"Unable to parse line {i} of sample file \'{samplefile}\': Unable to locate \'{r1_fastq}\': No such file or directory")
-        if not os.path.exists(r2_fastq):
-            raise AttributeError(f"Unable to parse line {i} of sample file \'{samplefile}\': Unable to locate \'{r2_fastq}\': No such file or directory")
+# with open(samplefile) as f:
+#     i = 0  # Line counter
+#     for line in f:
+#         i += 1
+#         line = line.rstrip("\n").rstrip("\r")
+#         if line.startswith("#"):  # Ignore comment lines
+#             continue
+#         try:
+#             cols = line.split("\t")
+#             sample_id = cols[0]
+#             r1_fastq = cols[1]
+#             r2_fastq = cols[2]
+#             run_id = cols[3]
+#         except IndexError as e:
+#             raise AttributeError(f"Unable to parse line {i} of sample file \'{samplefile}\'. Expecting three tab-delineated columns corresponding to \'sample_id\', \'R1_fastq\', \'R2_fastq\', and \'run_id\'") from e
+#         # Check that the specified FASTQs exist
+#         if not os.path.exists(r1_fastq):
+#             raise AttributeError(f"Unable to parse line {i} of sample file \'{samplefile}\': Unable to locate \'{r1_fastq}\': No such file or directory")
+#         if not os.path.exists(r2_fastq):
+#             raise AttributeError(f"Unable to parse line {i} of sample file \'{samplefile}\': Unable to locate \'{r2_fastq}\': No such file or directory")
 
-        # Check that this sample doesn't already exist
-        if sample_id in r1_fastqs:
-            raise AttributeError(f"Duplicate sample ID \'{sample_id}\' in sample file \'{samplefile}")
-        samplelist.append(sample_id)
-        r1_fastqs[sample_id] = r1_fastq
-        r2_fastqs[sample_id] = r2_fastq
+#         # Check that this sample doesn't already exist
+#         if sample_id in r1_fastqs:
+#             raise AttributeError(f"Duplicate sample ID \'{sample_id}\' in sample file \'{samplefile}")
+#         samplelist.append(sample_id)
+#         r1_fastqs[sample_id] = r1_fastq
+#         r2_fastqs[sample_id] = r2_fastq
 
-        # Store the runID for this sample
-        sample_to_runid[sample_id] = run_id
+#         # Store the runID for this sample
+#         sample_to_runid[sample_id] = run_id
 
 outdir = config["cappseq_umi_workflow"]["baseoutdir"]
-
-
-def generate_read_group(fastq, sample):
-    # Parses flowcell, lane, and barcode information from FASTQ read names
-    # Uses this information (and config file info) to generate a read group line
-    if is_gzipped(fastq):
-        readname = gzip.open(fastq, "rt").readline()
-    else:
-        readname = open(fastq, "r").readline()
-
-    # Parse out the attributes for the read group from the read name
-    readname = readname.rstrip("\n").rstrip("\r")
-    cols = readname.split(":")
-
-    sequencer = cols[0]
-    sequencer = sequencer.replace("@","")
-    flowcell = cols[2]
-    flowcell = flowcell.split("-")[-1]
-    lane = cols[3]
-    barcode = cols[-1]
-
-    # From the config (generic and should be consistent between runs)
-    description = config["cappseq_umi_workflow"]["readgroup"]["description"]
-    centre = config["cappseq_umi_workflow"]["readgroup"]["centre"]
-    platform = config["cappseq_umi_workflow"]["readgroup"]["platformunit"]
-    platformmodel = config["cappseq_umi_workflow"]["readgroup"]["platformmodel"]
-
-    # Get the date this sample was generated.
-    # This isn't perfect, but it should be relatively close to the sequencing date.
-    origpath = os.path.realpath(fastq)
-    date = datetime.date.fromtimestamp(os.path.getctime(origpath)).isoformat()  # Get creation date of FASTQ file
-    platformunit = flowcell + "-" + lane + ":" + barcode
-
-    readgroup = f"@RG\\tID:{sample}\\tBC:{barcode}\\tCN:{centre}\\tDS:\'{description}\'\\tDT:{date}\\tLB:{sample}\\tPL:{platform}\\tPM:{platformmodel}\\tPU:{platformunit}\\tSM:{sample}"
-    return readgroup
-
-
-# Adapted from the multiQC module
-# Used to calculate the estimated total number of molecules in a library
-def estimateLibrarySize(readPairs, uniqueReadPairs):
-    """
-    Picard calculation to estimate library size
-    Taken & translated from the Picard codebase:
-    https://github.com/broadinstitute/picard/blob/78ea24466d9bcab93db89f22e6a6bf64d0ad7782/src/main/java/picard/sam/DuplicationMetrics.java#L153-L164
-    Note: Optical duplicates are contained in duplicates and therefore do not enter the calculation here.
-    See also the computation of READ_PAIR_NOT_OPTICAL_DUPLICATES.
-     * Estimates the size of a library based on the number of paired end molecules observed
-     * and the number of unique pairs observed.
-     * <p>
-     * Based on the Lander-Waterman equation that states:
-     * C/X = 1 - exp( -N/X )
-     * where
-     * X = number of distinct molecules in library
-     * N = number of read pairs
-     * C = number of distinct fragments observed in read pairs
-    """
-
-    readPairDuplicates = readPairs - uniqueReadPairs
-
-    if readPairs > 0 and readPairDuplicates > 0:
-
-        m = 1.0
-        M = 100.0
-
-        if uniqueReadPairs >= readPairs or f(m * uniqueReadPairs, uniqueReadPairs, readPairs) < 0:
-            logging.warning("Picard recalculation of ESTIMATED_LIBRARY_SIZE skipped - metrics look wrong")
-            return None
-
-        # find value of M, large enough to act as other side for bisection method
-        while f(M * uniqueReadPairs, uniqueReadPairs, readPairs) > 0:
-            M *= 10.0
-
-        # use bisection method (no more than 40 times) to find solution
-        for i in range(40):
-            r = (m + M) / 2.0
-            u = f(r * uniqueReadPairs, uniqueReadPairs, readPairs)
-            if u == 0:
-                break
-            elif u > 0:
-                m = r
-            elif u < 0:
-                M = r
-
-        return uniqueReadPairs * (m + M) / 2.0
-    else:
-        return None
-
-
-def f(x, c, n):
-    """
-    Picard calculation used when estimating library size
-    Taken & translated from the Picard codebase:
-    https://github.com/broadinstitute/picard/blob/78ea24466d9bcab93db89f22e6a6bf64d0ad7782/src/main/java/picard/sam/DuplicationMetrics.java#L172-L177
-    * Method that is used in the computation of estimated library size.
-    """
-    return c / x - 1 + math.exp(-n / x)
-
 
 rule trim_umi:
     """
@@ -207,7 +110,7 @@ rule bwa_align_unsorted:
     output:
         bam = temp(outdir + os.sep + "02-BWA" + os.sep + "{samplename}.bwa.unsort.bam")
     params:
-        readgroup = lambda w: generate_read_group(r1_fastqs[w.samplename], w.samplename),
+        readgroup = lambda w: fu.generate_read_group(r1_fastqs[w.samplename], w.samplename),
     threads:
         config["cappseq_umi_workflow"]["bwa_threads"]
     conda:
@@ -336,7 +239,7 @@ rule bwa_realign_bam:
     threads:
         config["cappseq_umi_workflow"]["bwa_threads"]
     params:
-        readgroup = lambda w: generate_read_group(r1_fastqs[w.samplename], w.samplename)
+        readgroup = lambda w: fu.generate_read_group(r1_fastqs[w.samplename], w.samplename)
     conda:
         "envs/bwa_picard_fgbio.yaml"
     log:
@@ -499,7 +402,7 @@ rule qc_calc_dupl:
         optical_dup = 0  # In this consensus approach (via UMIs) we lose info on which are optical duplicates
         per_dupl = read_pair_dups / orig_pairs
         # Custom added by Chris. Calculate the total size of this library, and how much we have sequenced
-        estimated_library_size = int(estimateLibrarySize(orig_pairs, col_read_pairs))  # Use MultiQC's function to calculate the library size
+        estimated_library_size = int(fu.estimateLibrarySize(orig_pairs, col_read_pairs))  # Use MultiQC's function to calculate the library size
         prop_library_seq = col_read_pairs / estimated_library_size
 
         # Close input

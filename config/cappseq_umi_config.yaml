@@ -4,6 +4,11 @@ cappseq_umi_workflow:
   captureregionsil: "__UPDATE__"  # Picard Interval List
   dbsnpvcf: "__UPDATE__"  # Should be BGzipped and TABIX indexed
 
+  repo_dir : "__UPDATE__"  # Path to the root of the repository
+  fastq_dirs:
+    - ["__UPDATE__"]
+    - ["__UPDATE__"]  # List of directories containing fastq files
+
   # Input and output
   samplefile: "config/samplelist.tsv"
   baseoutdir: "__UPDATE__"
