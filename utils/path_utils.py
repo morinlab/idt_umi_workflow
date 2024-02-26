@@ -9,7 +9,7 @@ class FastQInfo(object):
         super(FastQInfo, self).__init__()
         self.samplesheet = pd.read_csv(samplesheet, sep='\t', comment='#')
         self.sample_ids = self.samplesheet['sample_id'].tolist()
-        self.R1_fastsq, self.R2_fastsq = self.get_fastq_paths(fastq_dirs, self.sample_id)
+        self.R1_fastsq, self.R2_fastsq = self.get_fastq_paths(fastq_dirs, self.sample_ids)
         self.sampleID_to_Run = self.match_sampleID_to_Run(self.samplesheet)
 
     
