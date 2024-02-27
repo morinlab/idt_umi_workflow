@@ -2,6 +2,7 @@ import os
 import gzip
 import logging
 import math
+import datetime
 
 def generate_read_group(fastq, sample, config):
     # Parses flowcell, lane, and barcode information from FASTQ read names

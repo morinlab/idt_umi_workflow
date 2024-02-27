@@ -2,8 +2,6 @@
 
 import os
 import gzip
-import datetime
-# import pysam
 import math
 import sys
 
@@ -31,8 +29,8 @@ import utils.fastq_utils as fu
 SAMPLEINFO = pu.FastQInfo(config["cappseq_umi_workflow"]["samplefile"], config["cappseq_umi_workflow"]["fastq_dirs"])
 
 SAMPLELIST = SAMPLEINFO.sample_ids
-r1_fastqs = SAMPLEINFO.R1_fastsq
-r2_fastqs = SAMPLEINFO.R2_fastsq
+r1_fastqs = SAMPLEINFO.R1_fastqs
+r2_fastqs = SAMPLEINFO.R2_fastqs
 sample_to_runid = SAMPLEINFO.sampleID_to_Run
 
 # Process sample file
@@ -110,7 +108,7 @@ rule bwa_align_unsorted:
     output:
         bam = temp(os.path.join(outdir , "02-BWA" , "{samplename}.bwa.unsort.bam"))
     params:
-        readgroup = lambda w: fu.generate_read_group(r1_fastqs[w.samplename], w.samplename),
+        readgroup = lambda w: fu.generate_read_group(r1_fastqs[w.samplename], w.samplename, config),
     threads:
         config["cappseq_umi_workflow"]["bwa_threads"]
     conda:
@@ -259,7 +257,7 @@ rule bwa_realign_bam:
     threads:
         config["cappseq_umi_workflow"]["bwa_threads"]
     params:
-        readgroup = lambda w: fu.generate_read_group(r1_fastqs[w.samplename], w.samplename)
+        readgroup = lambda w: fu.generate_read_group(r1_fastqs[w.samplename], w.samplename, config)
     conda:
         "envs/bwa_picard_fgbio.yaml"
     log:
