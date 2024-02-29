@@ -1,9 +1,10 @@
 channels:
-    - bioconda
     - conda-forge
+    - bioconda
+    - defaults
 dependencies:
     - bwa
     - samtools
-    - picard
+    - picard=3.1.1
     - fgbio>2
     - r-base>4

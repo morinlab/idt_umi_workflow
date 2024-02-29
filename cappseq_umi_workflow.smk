@@ -133,8 +133,10 @@ rule fgbio_annotate_umis:
         "envs/bwa_picard_fgbio.yaml"
     log:
         os.path.join(outdir , "logs" , "{samplename}.annotateumis.log")
+    resources:
+        mem_mb = 5000
     shell:
-        "fgbio AnnotateBamWithUmis --input {input.bam} --fastq {input.r1} --fastq {input.r2} --read-structure {params.umiloc} --output {output.bam} &> {log}"
+        "fgbio -Xms500m -Xmx5g AnnotateBamWithUmis --input {input.bam} --fastq {input.r1} --fastq {input.r2} --read-structure {params.umiloc} --output {output.bam} &> {log}"
 
 # Group reads by UMI into families
 rule fgbio_group_umis:
@@ -194,9 +196,9 @@ rule sanitize_bam:
     threads:
         config["cappseq_umi_workflow"]["basequal_threads"]
     shell:
-        """python utils/sanitize_bam.py --in_bam {input.bam} --out_bam {output.bam}
-        --tagstoremove {params.tagstoremove} --max_base_qual {params.max_base_qual} 
-        --threads {threads}"""
+        f"""python {os.path.join(config["cappseq_umi_workflow"]["repo_dir"], "utils/sanitize_bam.py")} --in_bam {{input.bam}} --out_bam {{output.bam}} \
+        --tagstoremove {{params.tagstoremove}} --max_base_qual {{params.max_base_qual}} \
+        --threads {{threads}}"""
 
 # rule sanitize_bam:
 #     input:
@@ -263,24 +265,28 @@ rule bwa_realign_bam:
     log:
         os.path.join(outdir , "logs", "{samplename}.bwa_realign.log")
     shell:
-        "samtools fastq -@ {threads} -N {input.bam} 2> {log} | bwa mem -R \"{params.readgroup}\" -p -t {threads} {input.refgenome} - 2>> {log} | samtools view -b | "
-        "picard SortSam -SO queryname -I /dev/stdin -O /dev/stdout 2>> {log} | fgbio SetMateInformation --ref {input.refgenome} --output {output.bam} &> {log}"
+        """samtools fastq -@ {threads} -N {input.bam} 2> {log} | bwa mem -R \"{params.readgroup}\" -p -t {threads} {input.refgenome} - 2>> {log} | samtools view -b |
+        picard SortSam -SO queryname -I /dev/stdin -O /dev/stdout 2>> {log} | fgbio SetMateInformation --ref {input.refgenome} --output {output.bam} &> {log}"""
 
 # Add back in family information from the unaligned consensus BAM
 rule picard_annotate_bam:
     input:
         unaligned_bam = rules.sanitize_bam.output.bam,
         aligned_bam = rules.bwa_realign_bam.output.bam,
-        refgenome = config["cappseq_umi_workflow"]["refgenome"]
+        refgenome = config["cappseq_umi_workflow"]["picard_refgenome"]
     output:
         bam = os.path.join(outdir, "99-final", "{samplename}.consensus.mapped.annot.bam")
     conda:
         "envs/bwa_picard_fgbio.yaml"
     log:
         os.path.join(outdir , "logs" , "{samplename}.picardannotate.log")
+    resources:
+        mem_mb = 10000
+    threads: 4
     shell:
-        "picard SortSam -I {input.unaligned_bam} -O /dev/stdout -SO queryname --REFERENCE_SEQUENCE {input.refgenome} | picard MergeBamAlignment --ALIGNED_BAM {input.aligned_bam} --UNMAPPED_BAM /dev/stdin --REFERENCE_SEQUENCE {input.refgenome} -O {output.bam} &> {log} && "
-        "samtools index {output.bam}"
+        """picard -Xms500m -Xmx10g SortSam -I {input.unaligned_bam} -O /dev/stdout -SO queryname --REFERENCE_SEQUENCE {input.refgenome} |
+           picard -Xms500m -Xmx10g MergeBamAlignment --ALIGNED_BAM {input.aligned_bam} --UNMAPPED_BAM /dev/stdin --REFERENCE_SEQUENCE {input.refgenome} -O {output.bam} &> {log} && 
+           samtools index {output.bam}"""
 
 # Output sentinel confirming that the final BAMs are valid
 rule picard_validate_sam:
@@ -331,7 +337,7 @@ rule qc_picard_hsmetrics:
         max_ram_records = "5000000",
         cov_cap_sens = "20000"
     conda:
-        "envs/picard_fastqc.yaml"
+        "envs/bwa_picard_fgbio.yaml"
     log:
         os.path.join(outdir , "logs" , "{samplename}.picard_hsmet.log")
     shell:
@@ -340,13 +346,13 @@ rule qc_picard_hsmetrics:
 rule qc_picard_oxog:
     input:
         bam = rules.picard_annotate_bam.output.bam,
-        refgenome = config["cappseq_umi_workflow"]["refgenome"]
+        refgenome = config["cappseq_umi_workflow"]["picard_refgenome"]
     output:
         txt = os.path.join(outdir, "Q3-oxog_metrics", "{samplename}.oxoG_metrics.txt")
     params:
         outdir = os.path.join(outdir , "Q3-oxog_metrics")
     conda:
-        "envs/picard_fastqc.yaml"
+        "envs/bwa_picard_fgbio.yaml"
     log:
         os.path.join(outdir , "logs", "{samplename}.picard_oxoG.log")
     shell:
@@ -361,7 +367,7 @@ rule qc_picard_insertsize:
     params:
         outdir = os.path.join(outdir , "Q4-insert_size")
     conda:
-        "envs/picard_fastqc.yaml"
+        "envs/bwa_picard_fgbio.yaml"
     log:
         os.path.join(outdir , "logs" , "{samplename}.picard_insertsize.log")
     shell:
@@ -370,12 +376,12 @@ rule qc_picard_insertsize:
 rule qc_fgbio_errorrate:
     input:
         bam = rules.picard_annotate_bam.output.bam,
-        refgenome = config["cappseq_umi_workflow"]["refgenome"]
+        refgenome = config["cappseq_umi_workflow"]["picard_refgenome"]
     output:
         txt = os.path.join(outdir , "Q5-error_rate" , "{samplename}.error_rate_by_read_position.txt")
     params:
-        outprefix = outdir + os.sep + "Q5-error_rate" + os.sep + "{samplename}",
-        outdir = outdir + os.sep + "Q5-error_rate",
+        outprefix = os.path.join(outdir, "Q5-error_rate" , "{samplename}"),
+        outdir = os.path.join(outdir , "Q5-error_rate"),
         capture_reg_il = config["cappseq_umi_workflow"]["captureregionsil"],
         dbsnpvcf = config["cappseq_umi_workflow"]["dbsnpvcf"]
     conda:
@@ -396,8 +402,8 @@ rule qc_calc_dupl:
     conda:
         "envs/pysam.yaml"
     shell:
-        """python utils/qc_calc_dupl.py --collapsed_bam {input.collapsed_bam} --all_reads_bam {input.all_reads_bam}
-        --outdir {params.outdir} --samplename {wildcards.samplename}"""
+        f"""python {os.path.join(config["cappseq_umi_workflow"]["repo_dir"], "utils/qc_calc_dupl.py")} --collapsed_bam {{input.collapsed_bam}} --all_reads_bam {{input.all_reads_bam}} \
+        --output {{output.txt}} --samplename {{wildcards.samplename}}"""
 
 # rule qc_calc_dupl:
 #     input:
@@ -492,7 +498,7 @@ checkpoint qc_multiqc:
     params:
         outdir = os.path.join(outdir , "Q9-multiqc"),
         outname = lambda w: "multiqc_report." + w.runid + ".html",
-        ignoresamples = lambda w: "*\' --ignore-samples \'".join(x for x in SAMPLELIST if sample_to_runid[x] != w.runid),
+        ignoresamples = lambda w: "\' --ignore-samples \'".join(x for x in SAMPLELIST if sample_to_runid[x] != w.runid),
         modules = "-m picard -m fastqc -m fgbio -m fastp",  # Should start with -m flag
         config = os.path.join(config["cappseq_umi_workflow"]["repo_dir"], "config/multiqc_config.yaml"),
         dupl_dir = rules.qc_calc_dupl.params.outdir,
@@ -509,7 +515,9 @@ checkpoint qc_multiqc:
     log:
         os.path.join(outdir, "logs" , "multiqc_{runid}.log")
     shell:
-        "multiqc --no-data-dir --interactive --config {params.config} --outdir {params.outdir} --filename {params.outname} --force {params.modules} {params.dupl_dir} {params.errorrate_dir} {params.insertsize_dir} {params.oxog_dir} {params.hsmet_dir} {params.fastqc_dir} {params.validsam_dir} {params.famsize_dir} {params.fastp_dir} --ignore-samples \'{params.ignoresamples}*\' > {log}"
+        """multiqc --no-data-dir --interactive --config {params.config} --outdir {params.outdir} --filename {params.outname} \
+        --force {params.modules} {params.dupl_dir} {params.errorrate_dir} {params.insertsize_dir} {params.oxog_dir} {params.hsmet_dir} {params.fastqc_dir} {params.validsam_dir} {params.famsize_dir} {params.fastp_dir} \
+        --ignore-samples \'{params.ignoresamples}\' > {log}"""
 
 rule all:
     input:

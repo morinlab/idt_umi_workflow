@@ -33,6 +33,8 @@ sp:
     skip: true
   picard/wgs_metrics:
     skip: true
+  fastp:
+    fn: "*.fastp.json"
 
 custom_plot_config:
   picard_percentage_target_bases:

@@ -47,7 +47,7 @@ def qc_calc_dupl(collapsed_bam: str, all_reads_bam: str, samplename: str , outpu
     orig_bam.close()
 
     # Write output
-    with open(f"{output_txt}.txt", "w") as o:
+    with open(f"{output_txt}", "w") as o:
         # To trick MultiQC into thinking this is a Picard output
         o.write("##picard.sam.markduplicates.MarkDuplicates BUT NOT ACTUALLY PICARD")
         o.write(os.linesep)

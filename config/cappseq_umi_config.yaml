@@ -1,5 +1,6 @@
 cappseq_umi_workflow:
   refgenome: "__UPDATE__"  # Should contain BWA indicies and samtools fai index in the same directory
+  picard_refgenome: "/projects/rmorin/reference/igenomes/Homo_sapiens/GSC/GRCh38/Sequence/WholeGenomeFasta/GRCh38_no_alt.fa" # includes the .dict
   captureregions: "__UPDATE__"
   captureregionsil: "__UPDATE__"  # Picard Interval List
   dbsnpvcf: "__UPDATE__"  # Should be BGzipped and TABIX indexed

@@ -5,7 +5,7 @@ import argparse
 def get_args():
     parser = argparse.ArgumentParser()
     # config
-    parser.add_argument('--tagstoremove',required=True,type=list,help='')
+    parser.add_argument('--tagstoremove',required=True,type=str,nargs='+',help='')
     parser.add_argument('--max_base_qual',required=True,type=int,help='')
 #    parser.add_argument('--min_base_qual',required=True,type=int,help='')
     parser.add_argument('--threads',required=True,type=int,help='')
